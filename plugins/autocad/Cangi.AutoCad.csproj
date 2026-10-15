@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>disable</Nullable>
+    <AssemblyName>Cangi.AutoCad</AssemblyName>
+    <RootNamespace>Cangi</RootNamespace>
+    <AutoCadDir Condition="'$(AutoCadDir)' == ''">C:\Program Files\Autodesk\AutoCAD 2025</AutoCadDir>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="AcMgd"><HintPath>$(AutoCadDir)\AcMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcDbMgd"><HintPath>$(AutoCadDir)\AcDbMgd.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="AcCoreMgd"><HintPath>$(AutoCadDir)\AcCoreMgd.dll</HintPath><Private>false</Private></Reference>
+  </ItemGroup>
+</Project>

@@ -12,11 +12,12 @@ log = logging.getLogger("cangi.bus")
 
 
 class EventBus:
-    """Bounded queue with a worker thread. Producers never block; when full, the oldest event is dropped."""
+    """Bounded queue with one worker thread. Producers never block; when full the oldest event is dropped."""
 
     def __init__(self, maxsize: int = 10000):
         self._q = queue.Queue(maxsize)
         self._subs: List[Callable[[Event], None]] = []
+        self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = None
         self.dropped = 0
@@ -24,24 +25,22 @@ class EventBus:
         self.latencies_ns = deque(maxlen=100000)
 
     def subscribe(self, callback: Callable[[Event], None]) -> None:
-        self._subs.append(callback)
+        with self._lock:
+            self._subs.append(callback)
 
     def publish(self, platform: str, raw: dict) -> None:
         item = (platform, raw)
-        try:
-            self._q.put_nowait(item)
-            return
-        except queue.Full:
-            pass
-        try:
-            self._q.get_nowait()
-        except queue.Empty:
-            pass
-        self.dropped += 1
-        try:
-            self._q.put_nowait(item)
-        except queue.Full:
-            self.dropped += 1
+        with self._lock:
+            while True:
+                try:
+                    self._q.put_nowait(item)
+                    return
+                except queue.Full:
+                    try:
+                        self._q.get_nowait()
+                        self.dropped += 1
+                    except queue.Empty:
+                        pass
 
     def start(self) -> None:
         self._stop.clear()
@@ -52,6 +51,7 @@ class EventBus:
         self._stop.set()
         if self._thread:
             self._thread.join(timeout=2)
+            self._thread = None
 
     def _run(self) -> None:
         while not (self._stop.is_set() and self._q.empty()):
@@ -65,9 +65,11 @@ class EventBus:
                 self.rejected += 1
                 log.warning("rejected event: %s", exc)
                 continue
-            for cb in self._subs:
+            self.latencies_ns.append(time.time_ns() - event.timestamp_ns)
+            with self._lock:
+                subs = list(self._subs)
+            for cb in subs:
                 try:
                     cb(event)
                 except Exception:
                     log.exception("subscriber failed")
-            self.latencies_ns.append(time.time_ns() - event.timestamp_ns)

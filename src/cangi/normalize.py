@@ -45,12 +45,12 @@ def normalize_type(raw_type: str) -> str:
 def normalize(platform: str, raw: dict) -> Event:
     if platform not in PLATFORMS:
         raise ValueError("unknown platform: %s" % platform)
-    kinds = KIND_MAP[platform]
     kind = raw.get("kind")
-    if kind not in kinds:
+    event_type = KIND_MAP[platform].get(kind)
+    if event_type is None:
         raise ValueError("unknown %s event kind: %s" % (platform, kind))
-    event_type = kinds[kind]
-    assert event_type in EVENT_TYPES
+    if "ts" not in raw:
+        raise ValueError("missing ts")
     return Event(
         timestamp_ns=int(raw["ts"]),
         platform=platform,

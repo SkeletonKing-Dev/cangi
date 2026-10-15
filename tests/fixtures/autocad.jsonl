@@ -1,0 +1,4 @@
+{"platform":"autocad","ts":1760000000000000000,"kind":"DocumentActivated","id":"Drawing1.dwg","type":"document","props":{},"cmd":""}
+{"platform":"autocad","ts":1760000000100000000,"kind":"CommandWillStart","id":"LINE","type":"command","props":{},"cmd":"LINE"}
+{"platform":"autocad","ts":1760000000200000000,"kind":"ObjectAppended","id":"2A1","type":"Line","props":{},"cmd":""}
+{"platform":"autocad","ts":1760000000300000000,"kind":"ObjectErased","id":"2A1","type":"Line","props":{},"cmd":""}

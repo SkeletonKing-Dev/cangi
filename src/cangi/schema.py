@@ -1,5 +1,5 @@
 import json
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
 
 PLATFORMS = ("freecad", "autocad", "qcad")
@@ -18,7 +18,7 @@ class Event:
     event_type: str
     entity_id: str = ""
     entity_type: str = ""
-    properties: Dict[str, Any] = field(default_factory=dict)
+    properties: Dict[str, Any] = field(default_factory=dict, hash=False, compare=True)
     command_context: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
@@ -26,9 +26,6 @@ class Event:
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), separators=(",", ":"))
-
-
-Action = Event
 
 
 @dataclass

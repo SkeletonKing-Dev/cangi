@@ -34,7 +34,7 @@ Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/). The core has no runt
 `--demo` shows a fixed overlay on every object change, so you can check a plugin end to end.
 Without it the overlay stays empty until a real diagnoser is plugged in (see below).
 
-Options for `cangi run`: `--host`, `--port`, `--qcad-in`, `--qcad-out`, `--echo`, `--log-level`.
+Options for `cangi run`: `--host`, `--port`, `--qcad-in`, `--qcad-out`, `--guide`, `--demo`, `--echo`, `--log-level`.
 
 ## FreeCAD
 
@@ -44,12 +44,10 @@ Copy or symlink `plugins/freecad/Cangi` into the FreeCAD user Mod directory, the
     mkdir -p ~/.local/share/FreeCAD/v1-1/Mod/
     ln -s "$PWD/plugins/freecad/Cangi" ~/.local/share/FreeCAD/v1-1/Mod/Cangi
 
-For Mac:
- 
     # Mac
-    ln -s "$PWD/plugins/freecad/Cangi" "~/Library/Application Support/FreeCAD/Mod/Cangi"
+    ln -s "$PWD/plugins/freecad/Cangi" "$HOME/Library/Application Support/FreeCAD/Mod/Cangi"
 
-Note: You can find the exact path by typing App.getUserAppDataDir() in the FreeCAD Python console.
+Note: you can find the exact path by typing `App.getUserAppDataDir()` in the FreeCAD Python console.
 
 The plugin starts with the GUI. It reads `CANGI_HOST` and `CANGI_PORT` (default 127.0.0.1:8765).
 Set `CANGI_AUTOSTART=0` to start it manually from the Python console:
@@ -60,11 +58,38 @@ Set `CANGI_AUTOSTART=0` to start it manually from the Python console:
 
 The plugin uses only the standard library and FreeCAD's own Qt and pivy. It does not need the cangi package installed in FreeCAD.
 
-After a change you should see three things:
+## Guide (LLM)
 
-* Dock panel: a “Cangi” panel opens on the right with two demo lines. This is the easiest one to check, and it stays for about 30 seconds.
-* Marker: a red ring with the label “demo: check constraints here” at the model origin (0,0,0) in the active 3D view. It stays for about 12 seconds, but only shows if the origin is in view. It is re-created on each edit, so it persists while you keep editing.
-* Toolbar highlight: a yellow border on the Sketcher_CreateLine button for about 8 seconds. It only appears when that button is on screen, which means the Sketcher workbench with a sketch open for editing.
+Temporary stand-in for the analysis engine. The user asks in plain language, the model returns a
+step-by-step plan, and cangi walks the user through it inside FreeCAD.
+
+1. Get an API key. The defaults target Groq's OpenAI-compatible endpoint with `openai/gpt-oss-20b`.
+   Any OpenAI-compatible service works by changing the variables below.
+2. Copy `.env.example` to `.env` and fill it in:
+
+       CANGI_LLM_API_KEY=...
+       CANGI_LLM_BASE_URL=https://api.groq.com/openai/v1
+       CANGI_LLM_MODEL=openai/gpt-oss-20b
+
+3. Start the server with the guide enabled:
+
+       uv run --env-file .env cangi run --guide
+
+4. In FreeCAD open the "Cangi" dock on the right, type a request such as `help me model a cube`
+   and press Enter.
+
+Each step shows:
+
+- an instruction and "Step n/m" in the dock
+- a yellow outline on the toolbar button to use (only when that button is on screen, so switch to
+  the right workbench first)
+- a red circle in the sketch where to work, drawn in sketch coordinates through the sketch placement
+- Back, Next and Stop buttons. A step also advances by itself when the model's expected event
+  happens (for example a sketch is created). Wrong or missing expectations never block Next.
+
+Plans are validated before use. Tool ids outside `src/cangi/guide/catalog.py` and malformed regions
+are dropped, and a reply that is not valid JSON is retried once. Errors such as a bad key or a rate
+limit are shown in the dock.
 
 ## AutoCAD
 
@@ -94,6 +119,7 @@ Step kinds a diagnosis can produce:
 |---|---|---|
 | highlight | tool (command id), subtle | toolbar button highlight (FreeCAD), panel line elsewhere |
 | arrow | world [x, y, z], text | marker and label at the model position |
+| region | space (sketch or world), center, radius, text | circle with a label (FreeCAD only) |
 | panel | lines | text panel |
 
 ## Layout
@@ -107,13 +133,20 @@ Step kinds a diagnosis can produce:
       presenter.py, protocol.py  steps to overlay frames
       app.py, demo.py, cli.py    pipeline wiring, demo diagnoser, `cangi` command
       bench.py                   `cangi bench`
+      guide/                     temporary LLM guide, delete when the engine replaces it
+        llm.py                   OpenAI-compatible client, config from environment
+        prompts.py, catalog.py   system prompt, toolbar command ids the model may use
+        plan.py                  parse and validate the model reply
+        session.py               position in a plan, steps for the overlay
+        context.py               what is open in the CAD application, for the prompt
+        service.py               ask, navigation, stale-result handling
     plugins/
-      freecad/Cangi/             FreeCAD Mod
+      freecad/Cangi/             FreeCAD Mod: client, observers, plan, scene, toolbar, panel, hud
       autocad/                   C# project
       qcad/telemetry.js
     tests/
       unit/                      no sockets or threads beyond the bus
-      integration/               hub, pipeline, plugin client over real sockets and files
+      integration/               hub, pipeline, plugin client, LLM client against a local fake endpoint
       fixtures/                  sample plugin output per platform
 
 ## Tests
@@ -122,12 +155,17 @@ Step kinds a diagnosis can produce:
     uv run pytest tests/unit           fast
     uv run pytest -m integration       sockets and files
 
-The FreeCAD HUD (Coin3D, Qt) and the AutoCAD and QCAD plugins are not covered by automated tests.
+The tests never call a real model. The FreeCAD HUD (Coin3D, Qt) and the AutoCAD and QCAD plugins
+are not covered by automated tests.
 They need the host application. Plugin output is checked against the core normalizer using the
 fixtures.
 
 ## Known limits
 
+- The guide's ask box and region circles exist in FreeCAD only. AutoCAD and QCAD show the
+  instruction text but cannot ask yet.
+- Model plans can be wrong, for example a hallucinated coordinate or a skipped step. Back and Next
+  always work.
 - QCAD draws no markers in the drawing, only the panel.
 - AutoCAD markers do not update on pan or zoom until the next frame. The tool highlight is shown as
   panel text.

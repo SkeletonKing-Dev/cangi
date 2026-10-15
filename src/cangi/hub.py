@@ -2,7 +2,7 @@ import json
 import logging
 import socketserver
 import threading
-from typing import Optional, Set, Tuple
+from typing import Callable, Optional, Set, Tuple
 
 from .bus import EventBus
 from .protocol import encode
@@ -32,8 +32,10 @@ class _Client:
 class Hub:
     """TCP endpoint for plugins. Reads events into the bus and broadcasts overlay frames to every client."""
 
-    def __init__(self, bus: EventBus, host: str = "127.0.0.1", port: int = 8765):
+    def __init__(self, bus: EventBus, host: str = "127.0.0.1", port: int = 8765,
+                 on_message: Optional[Callable[[dict], None]] = None):
         self.bus = bus
+        self._on_message = on_message
         self._clients: Set[_Client] = set()
         self._lock = threading.Lock()
         self._last: Optional[bytes] = None
@@ -97,8 +99,19 @@ class Hub:
             raw = json.loads(line)
             if not isinstance(raw, dict):
                 raise ValueError("not an object")
+            if "op" in raw:
+                self._dispatch(raw)
+                return
             platform = raw.pop("platform")
         except (ValueError, KeyError) as exc:
             log.warning("bad line: %r", exc)
             return
         self.bus.publish(platform, raw)
+
+    def _dispatch(self, message: dict) -> None:
+        if self._on_message is None:
+            return
+        try:
+            self._on_message(message)
+        except Exception:
+            log.exception("message handler failed")

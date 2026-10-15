@@ -21,3 +21,14 @@ def test_refresh_sends_full_state_with_increasing_seq():
     assert a.frames == b.frames
     assert a.frames[0]["steps"] == []
     assert a.frames[1]["steps"][0]["id"] == "tool"
+
+
+def test_status_is_part_of_every_frame_until_replaced():
+    c = WalkthroughController()
+    r = Recorder()
+    p = OverlayPresenter(c, [r])
+    p.refresh({"state": "thinking", "text": "x"})
+    p.refresh()
+    assert r.frames[1]["status"] == {"state": "thinking", "text": "x"}
+    p.refresh({"state": "idle", "text": ""})
+    assert r.frames[2]["status"]["state"] == "idle"

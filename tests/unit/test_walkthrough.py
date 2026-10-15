@@ -73,3 +73,23 @@ def test_frame_is_json_serializable_and_full_state():
     assert [s["id"] for s in frame["steps"]] == ["deficiency", "tool"]
     assert encode(frame).endswith(b"\n")
     assert overlay_frame(8, [])["steps"] == []
+
+
+def test_replace_prefix_keeps_other_steps():
+    q = StepQueue()
+    q.push(Step("tool", "highlight", 1, 9))
+    q.replace_prefix("guide:", [Step("guide:a", "panel", 1, 9)])
+    q.replace_prefix("guide:", [Step("guide:b", "panel", 1, 9)])
+    assert sorted(s.id for s in q.active()) == ["guide:b", "tool"]
+    q.replace_prefix("guide:", [])
+    assert [s.id for s in q.active()] == ["tool"]
+
+
+def test_guide_steps_do_not_expire():
+    t = [0.0]
+    c = WalkthroughController(StepQueue(clock=lambda: t[0]))
+    c.show_guide([Step("guide:a", "panel", 1, float("inf"))])
+    t[0] = 1e9
+    assert not c.tick()
+    c.clear_guide()
+    assert c.queue.empty()

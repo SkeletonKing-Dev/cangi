@@ -33,6 +33,16 @@ class StepQueue:
         with self._lock:
             self._steps[step.id] = step
 
+    def replace_prefix(self, prefix: str, steps: List[Step]) -> None:
+        """Atomically swap every step whose id starts with prefix for the given steps."""
+        now = self._clock()
+        with self._lock:
+            for k in [k for k in self._steps if k.startswith(prefix)]:
+                del self._steps[k]
+            for step in steps:
+                step.created = now
+                self._steps[step.id] = step
+
     def remove(self, step_id: str) -> None:
         with self._lock:
             self._steps.pop(step_id, None)
@@ -83,6 +93,7 @@ def _owner(constraint_id: str) -> str:
 
 
 class WalkthroughController:
+    GUIDE_PREFIX = "guide:"
     MAX_UNCERTAINTY = 0.7
     MIN_CONFIDENCE = 0.7
     LOW_MASTERY = 0.4
@@ -115,6 +126,13 @@ class WalkthroughController:
                 "panel", "panel", 3, 30.0, {"lines": list(d.walkthrough_lines)}, t0_ns=d.t0_ns))
             changed = True
         return changed
+
+    def show_guide(self, steps: List[Step]) -> None:
+        """Replace the guide's steps. Ids must start with GUIDE_PREFIX."""
+        self.queue.replace_prefix(self.GUIDE_PREFIX, steps)
+
+    def clear_guide(self) -> None:
+        self.queue.replace_prefix(self.GUIDE_PREFIX, [])
 
     def on_event(self, event: Event) -> bool:
         return self.queue.on_event(event)

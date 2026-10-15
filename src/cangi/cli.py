@@ -1,16 +1,28 @@
 import argparse
 import logging
 import signal
+import sys
 import threading
 
 from .app import Pipeline
 from .demo import demo_diagnoser
 
 
+def _chat_client():
+    from .guide import LLMConfig, LLMError, OpenAICompatClient
+    try:
+        config = LLMConfig.from_env()
+    except LLMError as exc:
+        sys.exit("error: %s" % exc)
+    logging.getLogger("cangi").info("guide enabled, model %s", config.model)
+    return OpenAICompatClient(config)
+
+
 def _run(args) -> None:
     pipeline = Pipeline(
         host=args.host, port=args.port,
         qcad_in=args.qcad_in, qcad_out=args.qcad_out,
+        chat=_chat_client() if args.guide else None,
         diagnoser=demo_diagnoser if args.demo else None,
         on_event=(lambda e: print(e.to_json(), flush=True)) if args.echo else None)
     pipeline.start()
@@ -38,6 +50,7 @@ def main(argv=None) -> None:
     r.add_argument("--qcad-in", help="JSONL file written by the QCAD plugin")
     r.add_argument("--qcad-out", help="frame file read by the QCAD plugin")
     r.add_argument("--demo", action="store_true", help="show a fixed overlay on every object change")
+    r.add_argument("--guide", action="store_true", help="enable the LLM guide (needs CANGI_LLM_API_KEY)")
     r.add_argument("--echo", action="store_true", help="print normalized events")
     r.add_argument("--log-level", default="INFO")
     r.set_defaults(func=_run)

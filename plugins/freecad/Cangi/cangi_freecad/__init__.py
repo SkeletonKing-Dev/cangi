@@ -20,10 +20,11 @@ def start(host=None, port=None):
     host = host or os.environ.get("CANGI_HOST", "127.0.0.1")
     port = int(port or os.environ.get("CANGI_PORT", "8765"))
 
-    hud = Hud(Gui.getMainWindow())
     bridge = Bridge()
+    client = Client("freecad", host, port, on_frame=bridge.frame.emit)
+    hud = Hud(Gui.getMainWindow(),
+              on_action=lambda action, text: client.send({"op": "guide", "action": action, "text": text}))
     bridge.frame.connect(hud.apply)
-    client = Client("freecad", host, port, on_frame=lambda f: bridge.frame.emit(f.get("steps", [])))
 
     def emit(kind, entity_id, entity_type, props=None):
         client.send({"ts": time.time_ns(), "kind": kind, "id": entity_id,
@@ -46,5 +47,5 @@ def stop():
     FreeCAD.removeDocumentObserver(_running["doc_obs"])
     Gui.Selection.removeObserver(_running["sel_obs"])
     _running["client"].stop()
-    _running["hud"].clear()
+    _running["hud"].close()
     _running.clear()

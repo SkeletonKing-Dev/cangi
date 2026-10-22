@@ -1,7 +1,12 @@
-// QCAD plugin. Events go out through EVENTS_PATH (JSONL); overlay frames come in through FRAMES_PATH (JSON).
-var EVENTS_PATH = "/tmp/cangi_qcad.jsonl";
-var FRAMES_PATH = "/tmp/cangi_qcad_overlay.json";
-var POLL_MS = 100;
+// QCAD plugin. Emits JSONL events to cangi hub over TCP; receives overlay frames as JSON lines.
+var HOST = "127.0.0.1";
+var PORT = 8765;
+var PLATFORM = "qcad";
+var RECONNECT_MS = 1000;
+var MAX_PENDING = 1000;
+var DEBUG = false;            // set true for per-event logging
+
+function qd(msg) { if (DEBUG) qDebug(msg); }
 
 function cangiType(entity) {
     if (isNull(entity)) return "";
@@ -11,27 +16,6 @@ function cangiType(entity) {
     if (t === RS.EntityArc) return "arc";
     if (t === RS.EntityPoint) return "point";
     return "entity";
-}
-
-function cangiWrite(obj) {
-    var f = new QFile(EVENTS_PATH);
-    if (!f.open(new QIODevice.OpenMode(QIODevice.Append | QIODevice.Text))) return;
-    var s = new QTextStream(f);
-    s.writeString(JSON.stringify(obj) + "\n");
-    s.flush();
-    f.close();
-}
-
-function cangiReadFrame() {
-    var f = new QFile(FRAMES_PATH);
-    if (!f.exists() || !f.open(new QIODevice.OpenMode(QIODevice.ReadOnly | QIODevice.Text))) return null;
-    var text = new QTextStream(f).readAll();
-    f.close();
-    try {
-        return JSON.parse(text);
-    } catch (e) {
-        return null;
-    }
 }
 
 function cangiFrameLines(frame) {
@@ -51,56 +35,148 @@ function cangiFrameLines(frame) {
 }
 
 (function () {
-    if (qApp.property("cangiInstalled") === true) return;
-    qApp.setProperty("cangiInstalled", true);
+    try {
+        qDebug("cangi: IIFE start");
+        if (qApp.property("cangiInstalled") === true) { qDebug("cangi: guard, abort"); return; }
+        qApp.setProperty("cangiInstalled", true);
 
-    var appWin = EAction.getMainWindow();
+        var appWin = EAction.getMainWindow();
 
-    var listener = new RTransactionListenerAdapter();
-    appWin.addTransactionListener(listener);
-    listener.transactionUpdated.connect(function (document, changes) {
-        var ts = new Date().getTime() * 1000000;
-        var ids = changes.getAffectedObjects();
-        var list = changes.getPropertyChanges(ids);
-        for (var i = 0; i < ids.length; i++) {
-            var props = {};
-            if (list && list[i]) {
-                for (var j = 0; j < list[i].length; j++) {
-                    var pc = list[i][j];
-                    var name = pc.getPropertyTypeId().getPropertyTitle();
-                    props[name] = { old: String(pc.getOldValue()), "new": String(pc.getNewValue()) };
-                }
-            }
-            cangiWrite({
-                ts: ts,
-                kind: "transactionUpdated",
-                id: String(ids[i]),
-                type: cangiType(document.queryEntityDirect(ids[i])),
-                props: props,
-                cmd: ""
-            });
+        // --- dock panel for overlay frames ---
+        var label = new QLabel();
+        label.wordWrap = true;
+        label.margin = 8;
+        var dock = new QDockWidget("Cangi", appWin);
+        dock.objectName = "CangiPanel";
+        dock.setWidget(label);
+        appWin.addDockWidget(Qt.RightDockWidgetArea, dock);
+        dock.hide();
+
+        // --- TCP transport to the cangi hub ---
+        // QCAD's QIODevice.write only accepts QByteArray (or a single char),
+        // so every string must be wrapped before hitting the socket.
+        var socket = new QTcpSocket(appWin);
+        var connected = false;
+        var pending = [];       // queued event lines while disconnected
+        var rxbuf = "";         // partial-line accumulator
+        var lastSeq = -1;
+
+        function writeBytes(s) {
+            socket.write(new QByteArray(s));
         }
-    });
 
-    var label = new QLabel();
-    label.wordWrap = true;
-    label.margin = 8;
-    var dock = new QDockWidget("Cangi", appWin);
-    dock.objectName = "CangiPanel";
-    dock.setWidget(label);
-    appWin.addDockWidget(Qt.RightDockWidgetArea, dock);
-    dock.hide();
+        function send(obj) {
+            obj.platform = PLATFORM;   // hub does raw.pop("platform")
+            var line = JSON.stringify(obj) + "\n";
+            if (!connected) {
+                if (pending.length >= MAX_PENDING) pending.shift();
+                pending.push(line);
+                return;
+            }
+            try {
+                writeBytes(line);
+                socket.flush();
+                qd("cangi: wrote " + line.length + " chars");
+            } catch (e) {
+                qDebug("cangi: write threw " + e);
+            }
+        }
 
-    var lastSeq = -1;
-    var timer = new QTimer(appWin);
-    timer.interval = POLL_MS;
-    timer.timeout.connect(function () {
-        var frame = cangiReadFrame();
-        if (frame === null || frame.seq === lastSeq) return;
-        lastSeq = frame.seq;
-        var lines = cangiFrameLines(frame);
-        label.text = lines.join("\n");
-        if (lines.length > 0) dock.show(); else dock.hide();
-    });
-    timer.start();
+        function handleFrame(frame) {
+            if (!frame || !frame.steps) return;
+            if (typeof frame.seq !== "undefined") {
+                if (frame.seq === lastSeq) return;
+                lastSeq = frame.seq;
+            }
+            var lines = cangiFrameLines(frame);
+            label.text = lines.join("\n");
+            if (lines.length > 0) dock.show(); else dock.hide();
+        }
+
+        socket.stateChanged.connect(function (st) { qDebug("cangi: socket state=" + st); });
+        try { socket.errorOccurred.connect(function (e) { qDebug("cangi: socket error=" + e); }); } catch (x) {}
+        try { socket.error.connect(function (e) { qDebug("cangi: socket error=" + e); }); } catch (x) {}
+
+        socket.connected.connect(function () {
+            qDebug("cangi: CONNECTED, draining " + pending.length + " pending");
+            connected = true;
+            var items = pending;
+            pending = [];
+            for (var i = 0; i < items.length; i++) writeBytes(items[i]);
+            socket.flush();
+        });
+
+        socket.disconnected.connect(function () {
+            qDebug("cangi: DISCONNECTED");
+            connected = false;
+        });
+
+        socket.readyRead.connect(function () {
+            var chunk = socket.readAll();   // QByteArray
+            rxbuf += String(chunk);         // yields raw bytes in QCAD 3.33
+            var idx;
+            while ((idx = rxbuf.indexOf("\n")) >= 0) {
+                var line = rxbuf.substring(0, idx);
+                rxbuf = rxbuf.substring(idx + 1);
+                if (line.length === 0) continue;
+                var frame;
+                try { frame = JSON.parse(line); } catch (e) { continue; }
+                handleFrame(frame);
+            }
+        });
+
+        function tryConnect() {
+            if (connected) return;
+            if (String(socket.state()) !== "UnconnectedState") return;
+            qDebug("cangi: connectToHost " + HOST + ":" + PORT);
+            socket.connectToHost(HOST, PORT);
+        }
+
+        var reconnect = new QTimer(appWin);
+        reconnect.interval = RECONNECT_MS;
+        reconnect.timeout.connect(tryConnect);
+        reconnect.start();
+        tryConnect();
+
+        // --- transaction events -> hub ---
+        var listener = new RTransactionListenerAdapter();
+        appWin.addTransactionListener(listener);
+        listener.transactionUpdated.connect(function (document, changes) {
+            qd("cangi: transactionUpdated fired");
+            if (isNull(document) || isNull(changes)) {
+                qd("cangi: null changes, skipping");
+                return;
+            }
+            var ts = new Date().getTime() * 1000000;
+            var ids = changes.getAffectedObjects();
+            if (isNull(ids) || ids.length === 0) return;
+
+            for (var i = 0; i < ids.length; i++) {
+                var props = {};
+                var pcs = changes.getPropertyChanges(ids[i]);   // per-object overload
+                if (pcs) {
+                    for (var j = 0; j < pcs.length; j++) {
+                        var pc = pcs[j];
+                        var name = pc.getPropertyTypeId().getPropertyTitle();
+                        props[name] = {
+                            old: String(pc.getOldValue()),
+                            "new": String(pc.getNewValue())
+                        };
+                    }
+                }
+                send({
+                    ts: ts,
+                    kind: "transactionUpdated",
+                    id: String(ids[i]),
+                    type: cangiType(document.queryEntityDirect(ids[i])),
+                    props: props,
+                    cmd: ""
+                });
+            }
+        });
+
+        qDebug("cangi: install complete");
+    } catch (e) {
+        qDebug("cangi: FATAL " + e + "\n" + (e.stack || ""));
+    }
 })();
